@@ -123,8 +123,12 @@ export class ECLogCounter {
 
   /**
    * Delete all state for a key (its logs, snapshot, and leases), resetting
-   * the count to zero. Very large backlogs are cleaned up across several
-   * scheduled transactions; writes committed after the reset starts survive.
+   * the count to zero. Writes committed after the reset starts survive it.
+   *
+   * Cost: the first deletion batch (up to ~4,000 deletes plus their reads)
+   * runs inline in the calling mutation's transaction. Backlogs larger than
+   * one batch finish asynchronously across scheduled transactions, so reads
+   * in that window see a nonzero, shrinking count.
    */
   async reset(ctx: RunMutationCtx, key: string) {
     await ctx.runMutation(this.component.public.reset, {
@@ -184,7 +188,12 @@ export class ECLogCounter {
     bufferedDeltas.set(key, (bufferedDeltas.get(key) ?? 0) + delta);
   }
 
-  /** Write all buffered deltas with a single component call. */
+  /**
+   * Write all buffered deltas (one component call per ~8,000 keys). Each
+   * key is removed from the buffer only after it has been written, so a
+   * caller that catches a failure can call flushDeltas again to retry
+   * exactly the deltas that weren't written.
+   */
   async flushDeltas(ctx: BufferedCounterCtx) {
     const bufferedDeltas = ctx[bufferedCounterDeltasSymbol];
     if (!bufferedDeltas)
@@ -195,7 +204,16 @@ export class ECLogCounter {
       key,
       delta,
     })).filter(({ delta }) => delta !== 0);
+    for (let i = 0; i < deltas.length; i += MAX_DELTAS_PER_CALL) {
+      const chunk = deltas.slice(i, i + MAX_DELTAS_PER_CALL);
+      await ctx.runMutation(this.component.public.addMany, {
+        deltas: chunk,
+        compactionDelay: this.options.compactionDelay,
+        compactionLeaseDuration: this.options.compactionLeaseDuration,
+      });
+      for (const { key } of chunk) bufferedDeltas.delete(key);
+    }
+    // Drop any remaining net-zero entries; they write nothing.
     bufferedDeltas.clear();
-    await this.addMany(ctx, deltas);
   }
 }

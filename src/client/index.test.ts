@@ -216,6 +216,27 @@ describe("ECLogCounter unit behavior (fake ctx)", () => {
     );
   });
 
+  test("a failed flush keeps unwritten deltas so a retry writes them", async () => {
+    const counter = new ECLogCounter(components.ecLogCounter);
+    const runMutation = vi
+      .fn(async (..._args: unknown[]) => null)
+      .mockRejectedValueOnce(new Error("transient"));
+    const ctx = { runMutation } as unknown as RunMutationCtx;
+    const buffered = counter.bindDeltasBuffer(ctx);
+    await counter.addBuffered(buffered, "k", 2);
+    await expect(counter.flushDeltas(buffered)).rejects.toThrow("transient");
+    // The delta is still buffered; retrying writes it exactly once.
+    await counter.flushDeltas(buffered);
+    expect(runMutation).toHaveBeenCalledTimes(2);
+    const retryArgs = runMutation.mock.calls[1][1] as {
+      deltas: Array<{ key: string; delta: number }>;
+    };
+    expect(retryArgs.deltas).toEqual([{ key: "k", delta: 2 }]);
+    // And the buffer is now empty.
+    await counter.flushDeltas(buffered);
+    expect(runMutation).toHaveBeenCalledTimes(2);
+  });
+
   test("flushDeltas clears the buffer so a second flush writes nothing", async () => {
     const counter = new ECLogCounter(components.ecLogCounter);
     const { ctx, runMutation } = fakeCtx();

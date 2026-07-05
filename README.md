@@ -18,8 +18,8 @@ conflict-free by construction. A scheduled compaction pipeline periodically
 folds the log into a per-key snapshot behind a lease, so the log stays small.
 Reads return `snapshot + visible log entries` along with a `fullyConsistent`
 flag — `true` when the returned count reflects every write committed before
-the read, `false` when the uncompacted log was too large to scan and the
-count is (temporarily) missing recent increments.
+the read, `false` when the uncompacted log may have been larger than the
+scan budget, so the count may (temporarily) be missing recent increments.
 
 Compared to
 [`@convex-dev/sharded-counter`](https://www.convex.dev/components/sharded-counter):
@@ -215,5 +215,6 @@ npm i
 npm run dev
 ```
 
-See [example/convex/example.ts](example/convex/example.ts) for a complete
-usage example.
+See
+[example/convex/example.ts](https://github.com/stack1ng/convex-ec-log-counter/blob/main/example/convex/example.ts)
+for a complete usage example.

@@ -1,14 +1,13 @@
 name: Release to npm
 
-# Publishes the package to npm when a version tag (v*) is pushed, or manually
-# via workflow_dispatch. Requires an NPM_TOKEN repository secret (an npm
-# automation token with publish rights on this package). See PUBLISHING.md.
+# Publishes the package to npm when a version tag (v*) is pushed. Requires an
+# NPM_TOKEN repository secret (an npm automation token with publish rights on
+# this package). See PUBLISHING.md.
 
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions: {}
 
@@ -37,8 +36,13 @@ jobs:
       - name: Install
         run: npm ci
 
+      # tsc-only build from the committed _generated sources: `convex codegen`
+      # needs a configured deployment, which CI doesn't have. The test job
+      # verifies the committed _generated stays in sync at development time.
       - name: Build
-        run: npm run build:clean
+        run: |
+          npm run clean
+          npm run build
 
       - name: Check
         run: |

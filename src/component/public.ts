@@ -140,8 +140,12 @@ export const read = query({
 });
 
 // Deletes all state for a key (logs, snapshot, leases), resetting its count
-// to zero. Large backlogs are deleted across several scheduled transactions;
-// writes committed after the reset starts survive it.
+// to zero. Writes committed after the reset starts survive it.
+//
+// Cost: the first deletion batch (up to ~4,000 log deletes plus their reads)
+// runs inline in the calling transaction, sharing its read/write budgets.
+// Backlogs larger than one batch finish across scheduled follow-up
+// transactions, so reads in that window see a nonzero, shrinking count.
 export const reset = mutation({
   args: {
     key: v.string(),

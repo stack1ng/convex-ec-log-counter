@@ -1,5 +1,18 @@
 # Publishing
 
+## Prerequisite
+
+`npm run build:codegen`, `npm run release`, `npm run alpha`, and `npm version`
+(via `preversion`) all run `npx convex codegen`, which needs a configured
+Convex dev deployment. On a fresh clone, set one up once with:
+
+```sh
+npx convex dev --once   # an anonymous local deployment is fine
+```
+
+(The CI release workflow doesn't need this — it builds with plain `tsc` from
+the committed `src/component/_generated` sources.)
+
 ## First publish (manual, one time)
 
 npm requires the first publish of a new package to come from a logged-in

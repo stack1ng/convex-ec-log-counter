@@ -249,17 +249,15 @@ export const compactLogs = internalAction({
       numItems: COMPACTION_BATCH_SIZE,
     });
     if (boundary.pageSize === 0) {
-      // No more logs to compact, so release the lease and schedule a recheck.
-      await ctx.scheduler.runAfter(
-        0,
-        internal.compaction.releaseLeaseAndRecheck,
-        {
-          key,
-          lease,
-          compactionDelay,
-          compactionLeaseDuration,
-        },
-      );
+      // No more logs to compact: release the lease and recheck. Run it
+      // directly (not scheduled) so the whole step stays covered by this
+      // action's job entry, which the watchdog checks before stealing.
+      await ctx.runMutation(internal.compaction.releaseLeaseAndRecheck, {
+        key,
+        lease,
+        compactionDelay,
+        compactionLeaseDuration,
+      });
       return;
     }
     await ctx.runMutation(internal.compaction.compactLogSet, {
