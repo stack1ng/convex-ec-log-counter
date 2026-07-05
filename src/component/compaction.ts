@@ -405,9 +405,29 @@ export const compactLogSet = internalMutation({
   },
 });
 
-// Deletes everything stored for a key: pending logs (in batches), the
-// snapshot row, and any lease rows. Concurrent adds may commit while a batch
-// chain is in flight and survive the reset.
+async function deleteLogsUpToBoundary(
+  ctx: MutationCtx,
+  key: string,
+  boundaryCreationTime: number,
+): Promise<{ moreRemain: boolean }> {
+  const page = await ctx.db
+    .query("counter_logs")
+    .withIndex("by_key", (q) =>
+      q.eq("key", key).lte("_creationTime", boundaryCreationTime),
+    )
+    .take(COMPACTION_BATCH_SIZE);
+  for (const log of page) {
+    await ctx.db.delete("counter_logs", log._id);
+  }
+  return { moreRemain: page.length === COMPACTION_BATCH_SIZE };
+}
+
+// Deletes everything stored for a key up to the moment the reset starts:
+// pending logs, the snapshot row, and any lease rows. Writes committed after
+// the reset starts survive it — the deletion is bounded by the creation time
+// of the newest log visible at reset time, and a clear-lease blocks
+// compaction from folding pre-reset logs into a fresh snapshot while a large
+// backlog is being deleted across several scheduled transactions.
 export async function clearKeyHandler(
   ctx: MutationCtx,
   {
@@ -416,46 +436,105 @@ export async function clearKeyHandler(
     compactionLeaseDuration,
   }: { key: string; compactionDelay: number; compactionLeaseDuration: number },
 ) {
-  const logs = await paginator(ctx.db, schema)
-      .query("counter_logs")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .order("asc")
-      .paginate({ numItems: COMPACTION_BATCH_SIZE, cursor: null });
-    for (const log of logs.page) {
-      await ctx.db.delete("counter_logs", log._id);
-    }
-    if (!logs.isDone) {
-      // More logs than one transaction should delete; continue in a
-      // scheduled follow-up.
-      await ctx.scheduler.runAfter(0, internal.compaction.clearKey, {
-        key,
-        compactionDelay,
-        compactionLeaseDuration,
-      });
-      return;
-    }
+  // Fence out any in-flight compaction chain (its next renewLease will fail
+  // cleanly without touching the logs) and pause new chains.
+  const leases = await ctx.db
+    .query("compaction_leases")
+    .withIndex("by_key_and_expires_at", (q) => q.eq("key", key))
+    .take(64);
+  for (const lease of leases) {
+    await ctx.db.delete("compaction_leases", lease._id);
+  }
 
-    const snapshot = await ctx.db
-      .query("counter_snapshots")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .first();
-    if (snapshot) await ctx.db.delete("counter_snapshots", snapshot._id);
+  const snapshot = await ctx.db
+    .query("counter_snapshots")
+    .withIndex("by_key", (q) => q.eq("key", key))
+    .first();
+  if (snapshot) await ctx.db.delete("counter_snapshots", snapshot._id);
 
-    // Deleting lease rows fences out any in-flight compaction chain (its
-    // next renewLease will fail cleanly without touching the logs).
-    const leases = await ctx.db
-      .query("compaction_leases")
-      .withIndex("by_key_and_expires_at", (q) => q.eq("key", key))
-      .take(64);
-    for (const lease of leases) {
-      await ctx.db.delete("compaction_leases", lease._id);
-    }
+  // Everything to delete is at or before the newest currently-visible log;
+  // logs appended later have strictly greater creation times and survive.
+  const newestLog = await ctx.db
+    .query("counter_logs")
+    .withIndex("by_key", (q) => q.eq("key", key))
+    .order("desc")
+    .first();
+  if (!newestLog) return;
+
+  const { moreRemain } = await deleteLogsUpToBoundary(
+    ctx,
+    key,
+    newestLog._creationTime,
+  );
+  if (!moreRemain) return;
+
+  // Large backlog: hold a lease while scheduled follow-ups (exactly-once
+  // mutations) delete the rest, so no compaction chain folds still-pending
+  // pre-reset logs into a fresh snapshot mid-clear.
+  const clearLease = await ctx.db.insert("compaction_leases", {
+    key,
+    expires_at: Date.now() + compactionLeaseDuration,
+  });
+  await ctx.scheduler.runAfter(0, internal.compaction.clearKeyBatch, {
+    key,
+    lease: clearLease,
+    boundaryCreationTime: newestLog._creationTime,
+    compactionDelay,
+    compactionLeaseDuration,
+  });
 }
 
-export const clearKey = internalMutation({
+export const clearKeyBatch = internalMutation({
   args: {
     key: v.string(),
+    lease: v.id("compaction_leases"),
+    boundaryCreationTime: v.number(),
     ...configArgs,
   },
-  handler: clearKeyHandler,
+  handler: async (
+    ctx,
+    {
+      key,
+      lease,
+      boundaryCreationTime,
+      compactionDelay,
+      compactionLeaseDuration,
+    },
+  ) => {
+    await renewLease(ctx, lease, compactionLeaseDuration);
+    const { moreRemain } = await deleteLogsUpToBoundary(
+      ctx,
+      key,
+      boundaryCreationTime,
+    );
+    if (moreRemain) {
+      const job = await ctx.scheduler.runAfter(
+        0,
+        internal.compaction.clearKeyBatch,
+        {
+          key,
+          lease,
+          boundaryCreationTime,
+          compactionDelay,
+          compactionLeaseDuration,
+        },
+      );
+      await ctx.db.patch("compaction_leases", lease, { job });
+      return;
+    }
+    await ctx.db.delete("compaction_leases", lease);
+    // Adds that landed during the clear had their compaction signals no-op
+    // against the clear-lease; compact them now.
+    const pending = await ctx.db
+      .query("counter_logs")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .first();
+    if (pending) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.compaction.signalNeedCompaction,
+        { key, compactionDelay, compactionLeaseDuration },
+      );
+    }
+  },
 });

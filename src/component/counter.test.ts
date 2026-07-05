@@ -250,6 +250,29 @@ describe("reset", () => {
     expect((await t.query(api.public.read, { key: "keep" })).count).toBe(9);
     expect((await t.query(api.public.read, { key: "drop" })).count).toBe(0);
   });
+
+  test("multi-batch reset deletes only pre-reset logs; later adds survive", async () => {
+    const t = setup();
+    // More logs than one clear batch (COMPACTION_BATCH_SIZE = 4,000).
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 4_050; i++) {
+        await ctx.db.insert("counter_logs", { key: "k", delta: 1 });
+      }
+    });
+    await t.mutation(api.public.reset, { key: "k" });
+    // An add committed after the reset started, before the scheduled clear
+    // batches have finished.
+    await t.mutation(api.public.add, { key: "k", delta: 99 });
+    await drain(t);
+
+    expect(await t.query(api.public.read, { key: "k" })).toEqual({
+      count: 99,
+      fullyConsistent: true,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("compaction_leases").collect()).toHaveLength(0);
+    });
+  }, 30_000);
 });
 
 describe("randomized model check", () => {
