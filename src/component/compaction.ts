@@ -67,6 +67,9 @@ async function signalNeedCompactionHandler(
   const activeLease = await getActiveLease(ctx, key);
   if (activeLease) return;
 
+  // Deleting an expired lease fences out its chain (renewLease requires the
+  // row to exist), so a slow-but-alive chain that outlived its lease dies
+  // cleanly at its next renewal instead of racing the new one.
   await reapExpiredLeases(ctx, key);
 
   const lease = await ctx.db.insert("compaction_leases", {
@@ -74,7 +77,7 @@ async function signalNeedCompactionHandler(
     expires_at: Date.now() + compactionDelay + compactionLeaseDuration,
   });
 
-  await ctx.scheduler.runAfter(
+  const job = await ctx.scheduler.runAfter(
     compactionDelay,
     internal.compaction.compactLogs,
     {
@@ -84,6 +87,7 @@ async function signalNeedCompactionHandler(
       compactionLeaseDuration,
     },
   );
+  await ctx.db.patch("compaction_leases", lease, { job });
 
   // compactLogs is an action: Convex runs it at most once and never retries
   // it. If it (or any link of its chain) dies, this exactly-once watchdog
@@ -146,9 +150,10 @@ export const signalNeedCompactionMany = internalMutation({
 });
 
 // Recovers from dead compaction chains. While the lease keeps getting
-// renewed, the watchdog keeps watching; once the lease row is gone (chain
-// finished cleanly) it stops; if the lease expired in place (chain died), it
-// reaps the lease and re-signals when logs remain.
+// renewed (or its chain's scheduled function is still pending/running), the
+// watchdog keeps watching; once the lease row is gone (chain finished
+// cleanly) it stops; if the lease expired with its chain dead, it reaps the
+// lease and re-signals when logs remain.
 export const watchdogLease = internalMutation({
   args: {
     key: v.string(),
@@ -162,15 +167,32 @@ export const watchdogLease = internalMutation({
     const row = await ctx.db.get("compaction_leases", lease);
     if (!row) return; // chain completed and cleaned up after itself
 
-    const remaining = row.expires_at - Date.now();
-    if (remaining > 0) {
-      // Chain is still alive (the lease was renewed); check again later.
+    const rewatch = async (delay: number) => {
       await ctx.scheduler.runAfter(
-        remaining + WATCHDOG_SLACK_MS,
+        delay,
         internal.compaction.watchdogLease,
         { key, lease, compactionDelay, compactionLeaseDuration },
       );
+    };
+
+    const remaining = row.expires_at - Date.now();
+    if (remaining > 0) {
+      // Chain is still alive (the lease was renewed); check again later.
+      await rewatch(remaining + WATCHDOG_SLACK_MS);
       return;
+    }
+
+    // The lease expired — but only steal it if the chain is actually dead.
+    // A scheduled function still pending or running means the chain is slow
+    // (e.g. scheduler backlog), not gone; stealing now could duplicate work.
+    if (row.job) {
+      const job = await ctx.db.system.get(
+        "_scheduled_functions", row.job as Id<"_scheduled_functions">,
+      );
+      if (job?.state.kind === "pending" || job?.state.kind === "inProgress") {
+        await rewatch(WATCHDOG_SLACK_MS);
+        return;
+      }
     }
 
     await ctx.db.delete("compaction_leases", lease);
@@ -188,14 +210,16 @@ export const watchdogLease = internalMutation({
   },
 });
 
+// Ownership check: the chain owns the key for exactly as long as its lease
+// ROW exists. Takeover paths (signal reap, watchdog) delete the row first,
+// so a fenced-out chain fails here before touching any logs.
 async function renewLease(
   ctx: MutationCtx,
-  key: string,
   lease: Id<"compaction_leases">,
   compactionLeaseDuration: number,
 ) {
-  const activeLease = await getActiveLease(ctx, key);
-  if (activeLease?._id !== lease)
+  const row = await ctx.db.get("compaction_leases", lease);
+  if (!row)
     throw new ConvexError({
       code: "FAILED_PRECONDITION",
       message: "Lease is no longer valid",
@@ -243,7 +267,7 @@ export const compactLogs = internalAction({
       lease,
       compactionDelay,
       compactionLeaseDuration,
-      endCursor: boundary.endCursor,
+      pageSize: boundary.pageSize,
       moreLogsExist: !boundary.isDone,
     });
   },
@@ -285,7 +309,6 @@ export const getCompactLogSet = internalQuery({
     numItems: v.number(),
   },
   returns: v.object({
-    endCursor: v.string(),
     pageSize: v.number(),
     isDone: v.boolean(),
   }),
@@ -296,7 +319,6 @@ export const getCompactLogSet = internalQuery({
       .order("asc")
       .paginate({ numItems, cursor: null });
     return {
-      endCursor: logs.continueCursor,
       pageSize: logs.page.length,
       isDone: logs.isDone,
     };
@@ -307,7 +329,7 @@ export const compactLogSet = internalMutation({
   args: {
     key: v.string(),
     lease: v.id("compaction_leases"),
-    endCursor: v.string(),
+    pageSize: v.number(),
     moreLogsExist: v.boolean(),
     ...configArgs,
   },
@@ -316,25 +338,25 @@ export const compactLogSet = internalMutation({
     {
       key,
       lease,
-      endCursor,
+      pageSize,
       moreLogsExist,
       compactionDelay,
       compactionLeaseDuration,
     },
   ) => {
-    await renewLease(ctx, key, lease, compactionLeaseDuration);
+    await renewLease(ctx, lease, compactionLeaseDuration);
 
     const snapshot = await getSnapshot(ctx, key);
-    // Re-read the same bounded range the query saw. The lease guarantees no
-    // other compactor deleted rows in it, and appends land above endCursor.
+    // Re-read the same page the boundary query saw: the lease guarantees
+    // nothing else deletes logs in it, and concurrent appends only land
+    // after it, so the first `pageSize` rows are exactly the query's page.
     const logs = await paginator(ctx.db, schema)
       .query("counter_logs")
       .withIndex("by_key", (q) => q.eq("key", key))
       .order("asc")
       .paginate({
-        numItems: COMPACTION_BATCH_SIZE,
+        numItems: pageSize,
         cursor: null,
-        endCursor,
       });
 
     let delta = 0;
@@ -352,14 +374,19 @@ export const compactLogSet = internalMutation({
       else await ctx.db.insert("counter_snapshots", { ...patch, key });
     }
 
-    if (moreLogsExist)
-      await ctx.scheduler.runAfter(0, internal.compaction.compactLogs, {
-        key,
-        lease,
-        compactionDelay,
-        compactionLeaseDuration,
-      });
-    else {
+    if (moreLogsExist) {
+      const job = await ctx.scheduler.runAfter(
+        0,
+        internal.compaction.compactLogs,
+        {
+          key,
+          lease,
+          compactionDelay,
+          compactionLeaseDuration,
+        },
+      );
+      await ctx.db.patch("compaction_leases", lease, { job });
+    } else {
       // No more logs to compact, so we can release the lease.
       await ctx.db.delete("compaction_leases", lease);
 
