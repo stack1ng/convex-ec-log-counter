@@ -1,0 +1,52 @@
+name: Release to npm
+
+# Publishes the package to npm when a version tag (v*) is pushed, or manually
+# via workflow_dispatch. Requires an NPM_TOKEN repository secret (an npm
+# automation token with publish rights on this package). See PUBLISHING.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  release:
+    name: Check and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # npm --provenance
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Node setup
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          cache-dependency-path: package.json
+          node-version: "24.x"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build:clean
+
+      - name: Check
+        run: |
+          npm run test
+          npm run typecheck
+          npm run lint
+
+      - name: Publish
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

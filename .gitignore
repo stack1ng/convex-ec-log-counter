@@ -1,0 +1,13 @@
+.DS_Store
+.idea
+*.local
+*.log
+/.vscode/
+dist
+dist-ssr
+node_modules
+.eslintcache
+*.tgz
+*.tsbuildinfo
+.env.local
+.env
