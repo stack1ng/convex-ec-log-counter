@@ -67,6 +67,10 @@ app.use(conflictFreeCounter);
 export default app;
 ```
 
+New to Convex components? See the
+[using components guide](https://docs.convex.dev/components/using) for how an
+installed component is wired into your app.
+
 Instantiate the client (typically in its own module so every function shares
 one instance):
 
@@ -190,21 +194,51 @@ await counter.flushDeltas(bufferedCtx); // one addMany call, 2 log rows
 
 ## Testing your app
 
-The package ships a `/test` entry point for use with
-[`convex-test`](https://docs.convex.dev/functions/testing):
+The package ships a `/test` entry point so you can register the component in
+your own [`convex-test`](https://docs.convex.dev/functions/testing) suites —
+no running backend required.
+
+First expose your app's modules once, in a shared setup file:
+
+```ts
+// convex/test.setup.ts
+/// <reference types="vite/client" />
+export const modules = import.meta.glob("./**/*.ts");
+```
+
+Then register the component on each test instance and drive its scheduled
+compaction with fake timers:
 
 ```ts
 import { convexTest } from "convex-test";
+import { expect, test, vi } from "vitest";
 import conflictFreeCounter from "convex-conflict-free-counter/test";
 import schema from "./schema";
 import { modules } from "./test.setup";
+import { api } from "./_generated/api";
 
-const t = convexTest(schema, modules);
-conflictFreeCounter.register(t); // pass a name if you installed it under one
+test("counts events", async () => {
+  const t = convexTest(schema, modules);
+  // Pass the name here if you mounted it with `app.use(counter, { name })`.
+  conflictFreeCounter.register(t);
 
-// Compaction runs through the scheduler; drive it in tests with fake timers:
-// vi.useFakeTimers(); ...; await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await t.mutation(api.events.record, { kind: "signup" });
+
+  // Compaction runs through the scheduler. Advance timers one step at a
+  // time so each lease-guarded compaction step runs in order (jumping the
+  // whole timeline with `vi.runAllTimers` would expire leases early).
+  vi.useFakeTimers();
+  await t.finishAllScheduledFunctions(() => vi.advanceTimersToNextTimer());
+  vi.useRealTimers();
+
+  expect(await t.query(api.events.count, { kind: "signup" })).toMatchObject({
+    count: 1,
+  });
+});
 ```
+
+`register(t, name?)` calls `t.registerComponent` under the hood; the default
+name is `conflictFreeCounter`.
 
 <!-- END: Include on https://convex.dev/components -->
 

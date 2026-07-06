@@ -93,6 +93,21 @@ describe("read without compaction", () => {
       fullyConsistent: false,
     });
   });
+
+  test("logScanLimit is normalized to a non-negative integer", async () => {
+    const t = setup();
+    for (let i = 1; i <= 5; i++) {
+      await t.mutation(api.public.add, { key: "k", delta: i });
+    }
+    // Negative → treated as 0 (snapshot-only), never a negative numItems.
+    expect(
+      await t.query(api.public.read, { key: "k", logScanLimit: -3 }),
+    ).toEqual({ count: 0, fullyConsistent: false });
+    // Fractional → floored (2.9 → 2, so 1 + 2 = 3), never passed to paginate.
+    expect(
+      await t.query(api.public.read, { key: "k", logScanLimit: 2.9 }),
+    ).toEqual({ count: 3, fullyConsistent: false });
+  });
 });
 
 describe("input validation", () => {

@@ -101,6 +101,12 @@ export const addMany = mutation({
 export const read = query({
   args: {
     key: v.string(),
+    // Max uncompacted log rows to scan on top of the snapshot. A
+    // non-negative row count: 0 means snapshot-only, and omitting it scans
+    // as much as the transaction's read budget allows. (Kept as v.number()
+    // — the idiomatic count validator — rather than v.int64(), which would
+    // force bigint through the client API; it is normalized to a
+    // non-negative integer below.)
     logScanLimit: v.optional(v.number()),
   },
   returns: v.object({
@@ -110,13 +116,22 @@ export const read = query({
   handler: async (ctx, { key, logScanLimit }) => {
     const latestSnapshot = await getSnapshot(ctx, key);
 
+    // Treat logScanLimit as a non-negative integer so a negative or
+    // fractional value can't skew the Math.min / pagination below (a
+    // negative would otherwise force a snapshot-only read; a fraction would
+    // reach paginate's numItems).
+    const requestedScanLimit =
+      logScanLimit === undefined
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, Math.floor(logScanLimit));
+
     // Scan as many uncompacted logs as the caller allows and the
     // transaction's remaining read headroom permits.
     const headroom = await getReadHeadroom(ctx);
     const scanRowsLimit = Math.min(
       headroom.documentsRead,
       Math.floor(headroom.bytesRead / CONSERVATIVE_LOG_DOC_BYTES),
-      logScanLimit ?? Number.POSITIVE_INFINITY,
+      requestedScanLimit,
     );
     // Snapshot-only read: paginate rejects numItems < 1.
     if (scanRowsLimit < 1) {
