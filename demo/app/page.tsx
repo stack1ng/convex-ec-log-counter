@@ -3,9 +3,15 @@
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { api } from "../convex/_generated/api";
-import type { Doc } from "../convex/_generated/dataModel";
+import type { Id } from "../convex/_generated/dataModel";
 
-function DemoRun({ run }: { run: Doc<"demo_runs"> }) {
+type DemoRunInfo = {
+  _id: Id<"demo_runs">;
+  target_count: number;
+  shard_count: number;
+};
+
+function DemoRun({ run }: { run: DemoRunInfo }) {
   const values = useQuery(api.counter.values, { demo_run: run._id });
 
   return (
@@ -38,16 +44,20 @@ function DemoRun({ run }: { run: Doc<"demo_runs"> }) {
 }
 
 export default function Page() {
-  const runs = useQuery(api.counter.list);
-  const createRun = useMutation(api.counter.runDemoIncrements);
+  const createRun = useMutation(api.counter.runDemo);
+  const [runs, setRuns] = useState<DemoRunInfo[]>([]);
   const [targetCount, setTargetCount] = useState(100);
-  const [shardCount, setShardCount] = useState(3);
+  const [shardCount, setShardCount] = useState(10);
   const [creating, setCreating] = useState(false);
 
   async function handleCreate() {
     setCreating(true);
     try {
-      await createRun({ target_count: targetCount, shard_count: shardCount });
+      const run = await createRun({
+        target_count: targetCount,
+        shard_count: shardCount,
+      });
+      setRuns((prev) => [run, ...prev]);
     } finally {
       setCreating(false);
     }
@@ -95,9 +105,7 @@ export default function Page() {
 
       <div className="panel">
         <div className="label note">Demo runs</div>
-        {runs === undefined ? (
-          <div className="note">Loading…</div>
-        ) : runs.length === 0 ? (
+        {runs.length === 0 ? (
           <div className="note">No demo runs yet.</div>
         ) : (
           <div className="runs">

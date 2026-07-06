@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { api, components } from "./_generated/api";
+import { api, components, internal } from "./_generated/api";
 import { ConflictFreeCounter } from "convex-conflict-free-counter";
 import { Id } from "./_generated/dataModel";
 
@@ -11,13 +11,6 @@ const conflictFreeCounter = new ConflictFreeCounter(
 function getCounterKey(demo_run: Id<"demo_runs">) {
   return `demo-${demo_run}`;
 }
-
-export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    return await ctx.db.query("demo_runs").order("desc").collect();
-  },
-});
 
 export const values = query({
   args: {
@@ -48,16 +41,26 @@ export const values = query({
   },
 });
 
-export const runDemoIncrements = mutation({
+export const runDemo = mutation({
   args: {
     target_count: v.number(),
     shard_count: v.number(),
   },
+  returns: v.object({
+    _id: v.id("demo_runs"),
+    target_count: v.number(),
+    shard_count: v.number(),
+  }),
   handler: async (ctx, { target_count, shard_count }) => {
     const demoRun = await ctx.db.insert("demo_runs", {
       target_count,
       shard_count,
     });
+    // Delete the demo run after 15 minutes so we dont fill up the db forever
+    await ctx.scheduler.runAfter(10000, internal.counter.deleteDemoRun, {
+      demo_run: demoRun,
+    });
+
     const counter = await ctx.db.insert("naive_counters", {
       demo_run: demoRun,
       value: 0,
@@ -73,6 +76,7 @@ export const runDemoIncrements = mutation({
         demo_run: demoRun,
       });
     }
+    return { _id: demoRun, target_count, shard_count };
   },
 });
 
@@ -82,6 +86,15 @@ export const deleteDemoRun = internalMutation({
   },
   handler: async (ctx, { demo_run }) => {
     await ctx.db.delete("demo_runs", demo_run);
+    await conflictFreeCounter.reset(ctx, getCounterKey(demo_run));
+    await ctx.runMutation(components.shardedCounter.public.reset, {
+      name: getCounterKey(demo_run),
+    });
+    const naiveDoc = await ctx.db
+      .query("naive_counters")
+      .withIndex("by_demo_run", (q) => q.eq("demo_run", demo_run))
+      .first();
+    if (naiveDoc) await ctx.db.delete("naive_counters", naiveDoc._id);
   },
 });
 
@@ -126,4 +139,3 @@ export const incrementSharded = mutation({
     });
   },
 });
-
