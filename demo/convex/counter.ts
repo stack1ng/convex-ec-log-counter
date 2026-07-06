@@ -57,7 +57,7 @@ export const runDemo = mutation({
       shard_count,
     });
     // Delete the demo run after 15 minutes so we dont fill up the db forever
-    await ctx.scheduler.runAfter(10000, internal.counter.deleteDemoRun, {
+    await ctx.scheduler.runAfter(60000 * 15, internal.counter.deleteDemoRun, {
       demo_run: demoRun,
     });
 
