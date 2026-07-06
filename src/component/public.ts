@@ -146,6 +146,7 @@ export const read = query({
 // runs inline in the calling transaction, sharing its read/write budgets.
 // Backlogs larger than one batch finish across scheduled follow-up
 // transactions, so reads in that window see a nonzero, shrinking count.
+// Therefore, this is not gauranteed to be atomic.
 export const reset = mutation({
   args: {
     key: v.string(),

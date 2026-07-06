@@ -54,7 +54,9 @@ function assertFiniteDelta(delta: number) {
     throw new Error(`counter delta must be a finite number, got ${delta}`);
 }
 
-const bufferedCounterDeltasSymbol = Symbol("conflict-free-counter-buffered-deltas");
+const bufferedCounterDeltasSymbol = Symbol(
+  "conflict-free-counter-buffered-deltas",
+);
 
 type BufferedDeltas = Map<string, number>;
 
@@ -76,7 +78,9 @@ export type BufferedCounterCtx = RunMutationCtx & {
  * reflects every write.
  */
 export class ConflictFreeCounter {
-  private options: Required<Omit<ConflictFreeCounterOptions, "defaultLogScanLimit">> &
+  private options: Required<
+    Omit<ConflictFreeCounterOptions, "defaultLogScanLimit">
+  > &
     Pick<ConflictFreeCounterOptions, "defaultLogScanLimit">;
 
   constructor(
@@ -129,6 +133,8 @@ export class ConflictFreeCounter {
    * runs inline in the calling mutation's transaction. Backlogs larger than
    * one batch finish asynchronously across scheduled transactions, so reads
    * in that window see a nonzero, shrinking count.
+   *
+   * Therefore, this is not gauranteed to be atomic.
    */
   async reset(ctx: RunMutationCtx, key: string) {
     await ctx.runMutation(this.component.public.reset, {
