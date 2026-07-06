@@ -86,6 +86,29 @@ h1 {
   color: white;
 }
 
+.runs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.run {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.run-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.9rem;
+}
+
 .counters {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -93,17 +116,10 @@ h1 {
 }
 
 .counter {
-  background: var(--panel-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 16px;
-  opacity: 0.55;
-  transition: opacity 0.15s ease;
-}
-
-.counter.selected {
-  opacity: 1;
-  border-color: var(--accent);
 }
 
 .counter .label {
