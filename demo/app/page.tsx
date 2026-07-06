@@ -34,7 +34,10 @@ export default function Page() {
   // transactions — mutations sent through the websocket client would be
   // executed in order and never contend.
   const httpClient = useMemo(
-    () => new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!),
+    () =>
+      new ConvexHttpClient(
+        process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://placeholder.convex.cloud",
+      ),
     [],
   );
 

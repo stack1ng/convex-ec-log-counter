@@ -1,0 +1,5 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm --prefix .. install --include=dev && npm install --ignore-scripts",
+  "buildCommand": "npx convex deploy --cmd 'npm run build'"
+}

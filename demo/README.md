@@ -19,24 +19,29 @@ conflict window.
 
 ## Run locally
 
-From this directory:
+The demo depends on the component package via `file:..`, so build it once
+first (this installs its dev deps and emits `dist/`):
 
 ```sh
-npm install
-npx convex dev          # terminal 1 — creates .env.local on first run
-npm run dev             # terminal 2 — Next.js on http://localhost:3000
+npm --prefix .. install          # build the component package
+npm install --ignore-scripts     # install demo deps (skip the parent rebuild)
+npx convex dev                   # terminal 1 — creates .env.local on first run
+npm run dev                      # terminal 2 — Next.js on http://localhost:3000
 ```
 
-If `.env.local` only contains `CONVEX_URL`, add a
-`NEXT_PUBLIC_CONVEX_URL` line with the same value.
+If `.env.local` only contains `CONVEX_URL`, add a `NEXT_PUBLIC_CONVEX_URL`
+line with the same value.
 
 ## Deploy (Vercel)
 
-1. Import the repo in Vercel and set **Root Directory** to `demo`.
-2. Set the build command to `npx convex deploy --cmd 'npm run build'`.
-3. Create a Convex production deployment (`npx convex deploy` once locally,
-   or via the dashboard) and add its `CONVEX_DEPLOY_KEY` as a Vercel
-   environment variable.
+1. Import the repo and set **Root Directory** to `demo`.
+2. Leave the install and build commands to `vercel.json` (in this directory):
+   it builds the `file:..` component package with its dev deps, then runs
+   `npx convex deploy --cmd 'npm run build'`.
+3. Add `CONVEX_DEPLOY_KEY` (from a Convex production deployment) as a Vercel
+   environment variable. `convex deploy` injects `NEXT_PUBLIC_CONVEX_URL`
+   into the build automatically.
 
-The `prebuild` script builds the component package from the repo root, so
-the `file:..` dependency resolves without publishing to npm first.
+The parent package isn't published to npm, so `installCommand` in
+`vercel.json` builds it from source — Vercel's production install would
+otherwise skip its dev deps and the parent's `prepare` (tsc) would fail.
