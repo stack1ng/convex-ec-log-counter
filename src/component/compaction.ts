@@ -110,8 +110,10 @@ export const signalNeedCompaction = internalMutation({
     key: v.string(),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     await signalNeedCompactionHandler(ctx, args);
+    return null;
   },
 });
 
@@ -122,6 +124,7 @@ export const signalNeedCompactionMany = internalMutation({
     keys: v.array(v.string()),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (
     ctx,
     { keys, compactionDelay, compactionLeaseDuration },
@@ -146,6 +149,7 @@ export const signalNeedCompactionMany = internalMutation({
         },
       );
     }
+    return null;
   },
 });
 
@@ -160,12 +164,13 @@ export const watchdogLease = internalMutation({
     lease: v.id("compaction_leases"),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (
     ctx,
     { key, lease, compactionDelay, compactionLeaseDuration },
   ) => {
     const row = await ctx.db.get("compaction_leases", lease);
-    if (!row) return; // chain completed and cleaned up after itself
+    if (!row) return null; // chain completed and cleaned up after itself
 
     const rewatch = async (delay: number) => {
       await ctx.scheduler.runAfter(
@@ -179,19 +184,17 @@ export const watchdogLease = internalMutation({
     if (remaining > 0) {
       // Chain is still alive (the lease was renewed); check again later.
       await rewatch(remaining + WATCHDOG_SLACK_MS);
-      return;
+      return null;
     }
 
     // The lease expired — but only steal it if the chain is actually dead.
     // A scheduled function still pending or running means the chain is slow
     // (e.g. scheduler backlog), not gone; stealing now could duplicate work.
     if (row.job) {
-      const job = await ctx.db.system.get(
-        "_scheduled_functions", row.job as Id<"_scheduled_functions">,
-      );
+      const job = await ctx.db.system.get("_scheduled_functions", row.job);
       if (job?.state.kind === "pending" || job?.state.kind === "inProgress") {
         await rewatch(WATCHDOG_SLACK_MS);
-        return;
+        return null;
       }
     }
 
@@ -207,6 +210,7 @@ export const watchdogLease = internalMutation({
         { key, compactionDelay, compactionLeaseDuration },
       );
     }
+    return null;
   },
 });
 
@@ -240,6 +244,7 @@ export const compactLogs = internalAction({
     lease: v.id("compaction_leases"),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (
     ctx,
     { key, lease, compactionDelay, compactionLeaseDuration },
@@ -258,7 +263,7 @@ export const compactLogs = internalAction({
         compactionDelay,
         compactionLeaseDuration,
       });
-      return;
+      return null;
     }
     await ctx.runMutation(internal.compaction.compactLogSet, {
       key,
@@ -268,6 +273,7 @@ export const compactLogs = internalAction({
       pageSize: boundary.pageSize,
       moreLogsExist: !boundary.isDone,
     });
+    return null;
   },
 });
 
@@ -277,6 +283,7 @@ export const releaseLeaseAndRecheck = internalMutation({
     key: v.string(),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (
     ctx,
     { key, lease, compactionDelay, compactionLeaseDuration },
@@ -298,6 +305,7 @@ export const releaseLeaseAndRecheck = internalMutation({
         },
       );
     }
+    return null;
   },
 });
 
@@ -331,6 +339,7 @@ export const compactLogSet = internalMutation({
     moreLogsExist: v.boolean(),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (
     ctx,
     {
@@ -400,6 +409,7 @@ export const compactLogSet = internalMutation({
         },
       );
     }
+    return null;
   },
 });
 
@@ -489,6 +499,7 @@ export const clearKeyBatch = internalMutation({
     boundaryCreationTime: v.number(),
     ...configArgs,
   },
+  returns: v.null(),
   handler: async (
     ctx,
     {
@@ -518,7 +529,7 @@ export const clearKeyBatch = internalMutation({
         },
       );
       await ctx.db.patch("compaction_leases", lease, { job });
-      return;
+      return null;
     }
     await ctx.db.delete("compaction_leases", lease);
     // Adds that landed during the clear had their compaction signals no-op
@@ -534,5 +545,6 @@ export const clearKeyBatch = internalMutation({
         { key, compactionDelay, compactionLeaseDuration },
       );
     }
+    return null;
   },
 });

@@ -27,6 +27,6 @@ export default defineSchema({
   compaction_leases: defineTable({
     key: v.string(),
     expires_at: v.number(),
-    job: v.optional(v.string()),
+    job: v.optional(v.id("_scheduled_functions")),
   }).index("by_key_and_expires_at", ["key", "expires_at"]),
 });
