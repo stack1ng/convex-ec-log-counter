@@ -7,20 +7,20 @@ Pushing a `v*` tag is the one and only way a version reaches npm.
 
 ## Cutting a release
 
-1. Bump the version and push the tag:
+1. Run the release command:
 
    ```sh
-   npm run release       # patch bump: updates CHANGELOG, commits, tags
-   # or  npm run alpha    # prerelease bump on the "alpha" dist-tag
-   # or, for a minor/major bump:
-   npm version minor && git push --follow-tags
+   npm run release
    ```
 
-   `npm version` runs the checks (`preversion`), then **prompts you for
-   release notes** on the terminal (one bullet per line, blank line to
-   finish) and writes them into `CHANGELOG.md`, then creates the commit and
-   tag. `npm run release` / `npm run alpha` also `git push --follow-tags` for
-   you. None of these publish anything themselves.
+   It prints the current version and **asks what to release next** — type an
+   explicit `x.y.z` (e.g. `1.0.0`) or a `patch` / `minor` / `major` keyword.
+   Then it runs the checks (`preversion`), **prompts you for CHANGELOG notes**
+   (one bullet per line, blank line to finish), commits, tags, and pushes the
+   tag. Nothing publishes locally.
+
+   (`npm run alpha` is a shortcut that auto-bumps a prerelease on the `alpha`
+   dist-tag, skipping the version prompt.)
 
 2. The pushed `v*` tag triggers the
    [release workflow](.github/workflows/release.yml). Running in the
